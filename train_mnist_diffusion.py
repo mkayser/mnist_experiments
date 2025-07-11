@@ -5,6 +5,7 @@ import time
 import numpy as np
 import matplotlib.pyplot as plt
 import math
+import models.autoencoders
 
 
 def display_mnist_inputs_and_outputs(input_imgs, output_imgs, input_fft_imgs, output_fft_imgs, dims=(None,8)):
@@ -101,19 +102,12 @@ testset = datasets.MNIST(root="./data", train=False, download=True, transform=tr
 trainloader = torch.utils.data.DataLoader(trainset, batch_size=512, shuffle=True, num_workers=4, pin_memory=True)
 testloader = torch.utils.data.DataLoader(testset, batch_size=1000, shuffle=False)
 
-h = 256
 
 # Simple MLP model
-model = nn.Sequential(
-    nn.Flatten(),
-    nn.Linear(28*28, h),
-    nn.ReLU(),
-    nn.Linear(h, 28*28),
-    nn.Unflatten(1, (1, 28, 28))    
-)
+model = models.autoencoders.ConvAE(1)
 model.to(device)
 
-criterion = nn.MSELoss()
+criterion = nn.BCELoss()
 optimizer = optim.Adam(model.parameters())
 n_epochs = 10
 
