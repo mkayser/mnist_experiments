@@ -113,6 +113,13 @@ class ConvVAE(nn.Module):
             ConvSameBlock(ch2, in_ch, nonlinearity=nn.Sigmoid)
         )
 
+    def sample(self, n_samples):
+        device = next(self.parameters()).device
+        eps    = torch.randn(n_samples, self.code_dim, device=device)
+        self.eval()
+        with torch.no_grad():
+            return self.decoder(eps)
+
     def forward(self, x):
         B,C,H,W = x.shape
         assert H % 4 == 0 and W % 4 == 0, "H and W must be divisible by 4"
