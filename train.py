@@ -9,7 +9,6 @@ import models.autoencoders
 import analysis.visualization
 
 
-
 class LowPassFilter:
     def __init__(self, cutoff_freq, shape=(28,28)):
         self.cutoff = cutoff_freq
@@ -146,15 +145,19 @@ trainloader = torch.utils.data.DataLoader(trainset, batch_size=512, shuffle=True
 testloader = torch.utils.data.DataLoader(testset, batch_size=1000, shuffle=False)
 
 
-model = models.autoencoders.ConvVAE(1, 28, 28, 128)
+n_latent_dim = 32
+
+model = models.autoencoders.ConvVAE(1, 28, 28, n_latent_dim)
 model.to(device)
 
 optimizer = optim.Adam(model.parameters())
-n_epochs = 10
-n_samples = 16
+n_epochs = 35
+n_samples_to_viz = 16
 
-train_VAE(model, trainloader, n_epochs, optimizer)
+kl_loss_weight_rampup = np.array([0, .1, .1, .2, .2, .3, .3, .4, .5, .6, .7, .8, .9, 1.0])
+compute_kl_loss_weight = lambda epoch: kl_loss_weight_rampup[min(epoch, len(kl_loss_weight_rampup)-1)]
+kl_min_loss_per_sample_per_dim = 0.0001
+
+train_VAE(model, trainloader, n_epochs, optimizer, kl_min_loss_per_sample_per_dim = kl_min_loss_per_sample_per_dim, compute_kl_loss_weight = compute_kl_loss_weight)
 evaluate_model(model, testloader)
-sample_VAE(model, n_samples)
-
-## Sampling from VAE: TODO
+sample_VAE(model, n_samples_to_viz)
