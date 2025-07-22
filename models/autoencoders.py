@@ -133,5 +133,5 @@ class ConvVAE(nn.Module):
 
         recon = self.decoder(z)
 
-        return recon, mu, logvar
+        return recon, mu, logvar, z
     

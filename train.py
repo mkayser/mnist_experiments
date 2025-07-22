@@ -6,6 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import math
 import models.autoencoders
+import models.discriminators
 import analysis.visualization
 
 
@@ -47,7 +48,7 @@ def evaluate_model(model, testloader):
     with torch.no_grad():
         for images, _ in testloader:
             images = images.to(device)
-            outputs, mu, logvar = model(images)
+            outputs, mu, logvar, latentz = model(images)
             recon_losses = rec_criterion(outputs, images)
             total += images.size(0)
             total_loss += recon_losses.sum()
@@ -79,9 +80,25 @@ def evaluate_model(model, testloader):
     #analysis.visualization.display_mnist_inputs_and_outputs(images_tensor, outputs_tensor, dims=(None,10))
 
 
-def train_VAE(model, trainloader, n_epochs, optimizer, kl_min_loss_per_sample_per_dim = 0.1, compute_kl_loss_weight = lambda epoch: min(epoch * 0.1, 0.5)):
-    # Training loop
+def train_VAE(
+        model,
+        trainloader,
+        n_epochs,
+        optimizer,
+        dmodel = None,
+        doptimizer = None,
+        kl_min_loss_per_sample_per_dim = 0.1,
+        kl_loss_schedule = lambda epoch: min(epoch * 0.1, 0.5),
+        latentdiscrim_loss_schedule = lambda epoch: min(epoch * 0.1, 0.5)):
+
     rec_criterion = nn.BCELoss(reduction='sum')
+
+    run_discrim_model = True
+    if (dmodel is None and doptimizer is None):
+        run_discrim_model = False
+    elif (dmodel is None or doptimizer is None):
+        print("Incompatible parameter settings: dmodel = {}   doptimizer = {}".format(dmodel, doptimizer))
+        exit(1)
 
     for epoch in range(n_epochs):
         model.train()
@@ -89,13 +106,30 @@ def train_VAE(model, trainloader, n_epochs, optimizer, kl_min_loss_per_sample_pe
         running_loss = 0
         running_rec_loss = 0
         running_unweighted_kl_loss = 0
+        running_unweighted_ld_loss = 0
         n_total_samples = 0
-        kl_loss_weight = compute_kl_loss_weight(epoch)
+        kl_loss_weight = kl_loss_schedule(epoch)
+        ld_loss_weight = latentdiscrim_loss_schedule(epoch)
 
         for images, _ in trainloader:
             images = images.to(device)
             optimizer.zero_grad()
-            outputs, mu, logvar = model(images)
+            outputs, mu, logvar, latentz = model(images)
+
+            # 1. Update discriminator
+
+            if run_discrim_model:
+                z_det = latentz.detach()                # stop gradients into encoder
+                D_trueprior = dmodel(torch.randn_like(latentz))   # classify true prior samples
+                D_latentposterior = dmodel(z_det)                 # classify encoder outputs
+            
+                dloss = -( torch.log(D_trueprior).mean()
+                           + torch.log(1 - D_latentposterior).mean() )
+                doptimizer.zero_grad()
+                dloss.backward()
+                doptimizer.step()
+
+            # 2. Update VAE with 3-part loss (recon, kl, latentdiscrim)
 
             rec_loss = rec_criterion(outputs, images)
             
@@ -106,10 +140,17 @@ def train_VAE(model, trainloader, n_epochs, optimizer, kl_min_loss_per_sample_pe
 
             loss = rec_loss + (kl_loss_weight * kl_loss)
 
+            if run_discrim_model:
+                discrim_loss = -torch.log(dmodel(latentz)).sum()
+                loss = loss + (ld_loss_weight * discrim_loss)
+            else:
+                discrim_loss = torch.tensor(0.0, device=loss.device, dtype=loss.dtype)
+
             loss.backward()
             optimizer.step()
             running_rec_loss += rec_loss.item()
-            running_unweighted_kl_loss += kl_loss
+            running_unweighted_kl_loss += kl_loss.item()
+            running_unweighted_ld_loss += discrim_loss.item()
             running_loss += loss.item()
             n_total_samples += len(images)
 
@@ -117,7 +158,8 @@ def train_VAE(model, trainloader, n_epochs, optimizer, kl_min_loss_per_sample_pe
         avg_loss = running_loss / n_total_samples
         avg_rec_loss = running_rec_loss / n_total_samples
         avg_kl_loss = running_unweighted_kl_loss / n_total_samples
-        print(f"Epoch {epoch+1:2d} | Time: {elapsed:.2f}s | Avg Loss: {avg_loss:.4f} | Avg Rec Loss: {avg_rec_loss:.4f} | Avg Unweighted KL Loss: {avg_kl_loss:.4f} | KL weight: {kl_loss_weight:.4f}")
+        avg_ld_loss = running_unweighted_ld_loss / n_total_samples
+        print(f"Epoch {epoch+1:2d} | Time: {elapsed:.2f}s | Avg Loss: {avg_loss:.4f} | Avg Rec Loss: {avg_rec_loss:.4f} | Avg Unw KL Loss: {avg_kl_loss:.4f} | KL weight: {kl_loss_weight:.4f} | Avg Unw LD Loss: {avg_ld_loss:.4f} | LD weight: {ld_loss_weight:.4f}")
     
 def sample_VAE(model, n_samples):
     samples = model.sample(n_samples).cpu().numpy()
@@ -150,14 +192,32 @@ n_latent_dim = 32
 model = models.autoencoders.ConvVAE(1, 28, 28, n_latent_dim)
 model.to(device)
 
+Dmodel = models.discriminators.PriorDiscriminator(n_latent_dim)
+Dmodel.to(device)
+
+
+
 optimizer = optim.Adam(model.parameters())
+Doptimizer = optim.Adam(Dmodel.parameters())
+
 n_epochs = 35
 n_samples_to_viz = 16
 
 kl_loss_weight_rampup = np.array([0, .1, .1, .2, .2, .3, .3, .4, .5, .6, .7, .8, .9, 1.0])
-compute_kl_loss_weight = lambda epoch: kl_loss_weight_rampup[min(epoch, len(kl_loss_weight_rampup)-1)]
+kl_loss_schedule = lambda epoch: kl_loss_weight_rampup[min(epoch, len(kl_loss_weight_rampup)-1)]
 kl_min_loss_per_sample_per_dim = 0.0001
 
-train_VAE(model, trainloader, n_epochs, optimizer, kl_min_loss_per_sample_per_dim = kl_min_loss_per_sample_per_dim, compute_kl_loss_weight = compute_kl_loss_weight)
+latentdiscrim_loss_weight_rampup = 6.0 * np.array([0, 0, 0, 0, 0, .1, .1, .2, .3, .4, .5, .6, .7, .8, .9, 1.0])
+latentdiscrim_loss_schedule = lambda epoch: latentdiscrim_loss_weight_rampup[min(epoch, len(latentdiscrim_loss_weight_rampup)-1)]
+
+train_VAE(model,
+          trainloader,
+          n_epochs,
+          optimizer,
+          dmodel = Dmodel,
+          doptimizer = Doptimizer,
+          kl_min_loss_per_sample_per_dim = kl_min_loss_per_sample_per_dim,
+          kl_loss_schedule = kl_loss_schedule,
+          latentdiscrim_loss_schedule = latentdiscrim_loss_schedule)
 evaluate_model(model, testloader)
 sample_VAE(model, n_samples_to_viz)
