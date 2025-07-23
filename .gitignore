@@ -1,0 +1,8 @@
+# Ignore all Python byte‑cache dirs wherever they appear
+__pycache__/
+
+# (Optionally) ignore all .pyc files, too
+*.pyc
+
+# Ignore any file ending with a tilde (e.g. foo.txt~, bar.py~)
+*~
